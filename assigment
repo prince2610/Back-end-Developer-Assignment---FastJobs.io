@@ -1,0 +1,93 @@
+    npx typescript --init
+    npm i express zod dotenv @types/express @types/dotenv @types/swagger-ui-express swagger-ui-express google-auth-library googleapis // install required dependinces
+        FROM node:16
+// create the dockerfile.
+    WORKDIR /usr/src/app
+
+    COPY package*.json ./
+    RUN npm install --only=production 
+
+    COPY . .
+
+    EXPOSE 3000
+    CMD [ "npm", "start" ]
+
+    import express from 'express';
+    import { createServer } from 'http';
+    import { Server } from 'socket.io';
+    import { authenticate, getOAuthClient, listEvents } from './auth';
+    import { ScheduleMeetingRequest, ScheduleMeetingResponse } from './types';
+    import { scheduleMeetingSchema } from './validate';
+
+    const app = express();
+    const server = createServer(app);
+    const io = new Server(server, {
+        cors: {
+            origin: '*',
+        },
+    });
+
+    app.use(express.json());
+
+    app.get('/', (req, res) => {
+        res.send('Hello, world!');
+    });
+
+    app.post('/schedule', async (req, res) => {
+        try {
+            const { error, value } = scheduleMeetingSchema.parse(req.body);
+            if (error) throw error;
+
+            const client = await getOAuthClient();
+            const auth = await authenticate(client);
+
+            const event = {
+                summary: 'Meeting with ' + value.username,
+                location: value.location,
+                description: value.description,
+                start: {
+                    dateTime: value.start,
+                    timeZone: value.timeZone,
+                },
+                end: {
+                    dateTime: value.end,
+                    timeZone: value.timeZone,
+                },
+                attendees: [
+                    { email: value.userEmail },
+                    { email: value.hostEmail },
+                ],
+                reminders: {
+                    useDefault: true,
+                },
+            };
+
+            const { data } = await client.calendar.events.insert({
+                auth,
+                calendarId: 'primary',
+                resource: event,
+            });
+
+            const response: ScheduleMeetingResponse = {
+                id: data.id,
+                summary: data.summary,
+                location: data.location,
+                description: data.description,
+                start: data.start?.dateTime ?? '',
+                end: data.end?.dateTime ?? '',
+                attendees: data.attendees?.map((attendee) => attendee.email ?? '') ?? [],
+            };
+
+            res.send(response);
+        } catch (error) {
+            console.error(error);
+            res.status(400).send({ error: error.message });
+        }
+    });
+
+    app.get('/events/:email', async (req, res) => {
+        try {
+            const { email } = req.params;
+
+            const client = await getOAuthClient();
+            const
